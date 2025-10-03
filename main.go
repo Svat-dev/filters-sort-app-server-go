@@ -12,6 +12,7 @@ import (
 
 	"main/shared"
 
+	"github.com/asaskevich/govalidator"
 	"github.com/jackc/pgx/v5"
 	"github.com/joho/godotenv"
 )
@@ -48,44 +49,95 @@ func main() {
 		}
 
 		sortType := queryParams.Get("sort")
+		if ok := govalidator.IsIn(sortType, "HIGH_PRICE", "LOW_PRICE", "OLDEST", "NEWEST", ""); !ok {
+			http.Error(w, "Неверный тип сортировки", http.StatusBadRequest)
+		}
 		searchTerm := queryParams.Get("searchTerm")
 		if searchTerm == "" {
 			searchTerm = "%"
 		}
-		genres := strings.Split(queryParams.Get("genres"), ",")
-		platforms := strings.Split(queryParams.Get("platforms"), ",")
+
+		genres := shared.NormalizeSlice(strings.Split(queryParams.Get("genres"), ","))       // TODO validation
+		platforms := shared.NormalizeSlice(strings.Split(queryParams.Get("platforms"), ",")) // TODO validation
+
 		rating := queryParams.Get("rating")
 		if rating == "" {
 			rating = "0.0"
 		}
+		if ok := govalidator.IsFloat(rating); !ok {
+			http.Error(w, "Неверный формат рейтинга", http.StatusBadRequest)
+		}
+
 		minPrice := queryParams.Get("minPrice")
 		if minPrice == "" {
 			minPrice = "0"
 		}
+		if ok := govalidator.IsFloat(rating); !ok {
+			http.Error(w, "Неверный формат цены", http.StatusBadRequest)
+		}
+
 		maxPrice := queryParams.Get("maxPrice")
 		if maxPrice == "" {
 			maxPrice = "100"
 		}
-		// isAdultOnly := queryParams.Get("isAdultOnly") == "true"
+		if ok := govalidator.IsFloat(rating); !ok {
+			http.Error(w, "Неверный формат цены", http.StatusBadRequest)
+		}
 
 		var games []shared.Game
+		var query strings.Builder
+		var args []any
 
-		// Выполнение запроса
-		rows, err := conn.Query(context.Background(), "SELECT id, title, image, price, rating, age_rating, release_date, developer, publisher, genres, platforms FROM game WHERE price > $1 AND price < $2 AND rating >= $3 AND (title ILIKE '%' || $4 || '%' OR developer ILIKE '%' || $4 || '%' OR publisher ILIKE '%' || $4 || '%') AND genres @> $5 AND platforms @> $6", minPrice, maxPrice, rating, searchTerm, genres, platforms)
+		baseQuery := `
+			SELECT id, title, image, price, rating, age_rating, release_date, developer, publisher, genres, platforms 
+			FROM game 
+			WHERE price > $1 AND price < $2 AND rating >= $3 
+			  AND (title ILIKE '%' || $4 || '%' OR developer ILIKE '%' || $4 || '%' OR publisher ILIKE '%' || $4 || '%')
+		` //сделать ORDER BY тут а не далее
+
+		args = append(args, minPrice, maxPrice, rating, searchTerm)
+		query.WriteString(baseQuery)
+
+		if len(genres) > 0 {
+			query.WriteString(" AND genres @> $5")
+			args = append(args, genres)
+		}
+
+		if len(platforms) > 0 {
+			if len(genres) > 0 {
+				query.WriteString(" AND platforms @> $6")
+			} else {
+				query.WriteString(" AND platforms @> $5")
+			}
+			args = append(args, platforms)
+		}
+
+		rows, err := conn.Query(context.Background(), query.String(), args...)
 		if err != nil {
-			http.Error(w, "Ошибка запроса", http.StatusInternalServerError)
+			log.Printf("Ошибка запроса: %v", err)
+			http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
 
 		for rows.Next() {
 			var game shared.Game
-
-			if err := rows.Scan(&game.ID, &game.Title, &game.ImageUrl, &game.Price, &game.Rating, &game.AgeRating, &game.ReleaseDate, &game.Developer, &game.Publisher, &game.Genres, &game.Platforms); err != nil {
-				http.Error(w, "Ошибка сканирования", http.StatusInternalServerError)
+			if err := rows.Scan(
+				&game.ID,
+				&game.Title,
+				&game.ImageUrl,
+				&game.Price,
+				&game.Rating,
+				&game.AgeRating,
+				&game.ReleaseDate,
+				&game.Developer,
+				&game.Publisher,
+				&game.Genres,
+				&game.Platforms); err != nil {
+				log.Printf("Ошибка сканирования: %v", err)
+				http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
 				return
 			}
-
 			games = append(games, game)
 		}
 
@@ -100,19 +152,17 @@ func main() {
 			sort.Sort(sort.Reverse(shared.SortByReleaseDate(games)))
 		}
 
-		// Отправка данных в JSON
 		w.Header().Set("Content-Type", "application/json")
-
 		data, err := json.Marshal(games)
 		if err != nil {
-			http.Error(w, "Ошибка сериализации", http.StatusInternalServerError)
+			log.Printf("Ошибка сериализации: %v", err)
+			http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 
 		w.Write(data)
 	})
 
-	// Запуск сервера
 	log.Printf("Сервер запущен на http://localhost:%s", port)
 	http.ListenAndServe(":"+port, nil)
 }
