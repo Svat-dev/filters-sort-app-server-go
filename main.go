@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"main/error"
@@ -45,6 +46,26 @@ func main() {
 		queryParams, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
 			error.ThrowError(w, "Ошибка парсинга параметров", http.StatusBadRequest)
+			return
+		}
+
+		page := queryParams.Get("page")
+		if page == "" {
+			page = "1"
+		}
+		page64, err := strconv.Atoi(page)
+		if err != nil {
+			error.ThrowError(w, "Неправильный тип числа", http.StatusBadRequest)
+			return
+		}
+
+		perPage := queryParams.Get("perPage")
+		if perPage == "" {
+			perPage = "30"
+		}
+		perPage64, err := strconv.Atoi(perPage)
+		if err != nil {
+			error.ThrowError(w, "Неправильный тип числа", http.StatusBadRequest)
 			return
 		}
 
@@ -145,6 +166,8 @@ func main() {
 		default:
 			query.WriteString(" ORDER BY release_date desc")
 		}
+
+		query.WriteString(" LIMIT " + strconv.Itoa(perPage64) + " OFFSET " + strconv.Itoa((page64-1)*perPage64))
 
 		rows, err := conn.Query(context.Background(), query.String(), args...)
 		if err != nil {
