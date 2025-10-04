@@ -102,6 +102,11 @@ func main() {
 			return
 		}
 
+		isAdultOnly := queryParams.Get("isAdultOnly")
+		if ok := govalidator.IsIn(isAdultOnly, "true", "false", ""); !ok {
+			error.ThrowError(w, `Неверный тип "только для взрослых"`, http.StatusBadRequest)
+		}
+
 		var games []shared.Game
 		var query strings.Builder
 		var args []any
@@ -170,8 +175,20 @@ func main() {
 			games = append(games, game)
 		}
 
+		var filteredGames []shared.Game
+
+		for _, game := range games {
+			if isAdultOnly != "true" {
+				filteredGames = append(filteredGames, game)
+			}
+
+			if govalidator.IsIn(string(game.AgeRating), string(shared.M), string(shared.AO)) {
+				filteredGames = append(filteredGames, game)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		data, err := json.Marshal(games)
+		data, err := json.Marshal(filteredGames)
 		if err != nil {
 			log.Printf("Ошибка сериализации: %v", err)
 			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
