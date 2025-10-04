@@ -163,6 +163,10 @@ func main() {
 		query.WriteString(baseQuery)
 		query2.WriteString(countQuery)
 
+		if isAdultOnly == "true" {
+			whereQuery.WriteString(" AND age_rating IN ('AO', 'M')")
+		}
+
 		if platform != "" {
 			str := " AND '" + platform + "' = ANY(platforms)"
 			whereQuery.WriteString(str)
@@ -236,21 +240,7 @@ func main() {
 			}
 		}
 
-		var filteredGames []shared.Game
-
-		for _, game := range games {
-			if isAdultOnly != "true" {
-				filteredGames = append(filteredGames, game)
-				continue
-			}
-
-			if govalidator.IsIn(string(game.AgeRating), string(shared.M), string(shared.AO)) {
-				filteredGames = append(filteredGames, game)
-				continue
-			}
-		}
-
-		response.Games = filteredGames
+		response.Games = games
 
 		w.Header().Set("Content-Type", "application/json")
 		data, err := json.Marshal(response)
