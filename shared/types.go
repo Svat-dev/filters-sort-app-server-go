@@ -20,3 +20,9 @@ type Game struct {
 
 	ReleaseDate time.Time `json:"release_date"`
 }
+
+type APIError struct {
+	Message   string    `json:"message"`
+	Status    int       `json:"status"`
+	Timestamp time.Time `json:"timestamp"`
+}

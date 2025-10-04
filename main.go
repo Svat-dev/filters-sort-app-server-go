@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 
+	"main/error"
 	"main/shared"
 
 	"github.com/asaskevich/govalidator"
@@ -44,44 +44,62 @@ func main() {
 	http.HandleFunc("/games", func(w http.ResponseWriter, r *http.Request) {
 		queryParams, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			http.Error(w, "Ошибка парсинга параметров", http.StatusBadRequest)
+			error.ThrowError(w, "Ошибка парсинга параметров", http.StatusBadRequest)
 			return
 		}
 
 		sortType := queryParams.Get("sort")
 		if ok := govalidator.IsIn(sortType, "HIGH_PRICE", "LOW_PRICE", "OLDEST", "NEWEST", ""); !ok {
-			http.Error(w, "Неверный тип сортировки", http.StatusBadRequest)
+			error.ThrowError(w, "Неверный тип сортировки", http.StatusBadRequest)
+			return
 		}
+
 		searchTerm := queryParams.Get("searchTerm")
 		if searchTerm == "" {
 			searchTerm = "%"
 		}
 
-		genres := shared.NormalizeSlice(strings.Split(queryParams.Get("genres"), ","))       // TODO validation
-		platforms := shared.NormalizeSlice(strings.Split(queryParams.Get("platforms"), ",")) // TODO validation
+		genres := shared.NormalizeSlice(strings.Split(queryParams.Get("genres"), ","))
+		for _, genre := range genres {
+			if ok := govalidator.IsIn(genre, "Action", "Shooter", "Horror", "RPG", "Adventure"); !ok {
+				error.ThrowError(w, "Неверный набор жанров", http.StatusBadRequest)
+				return
+			}
+		}
+
+		platforms := shared.NormalizeSlice(strings.Split(queryParams.Get("platforms"), ","))
+		for _, platform := range platforms {
+			if ok := govalidator.IsIn(platform, "PC", "Xbox", "PlayStation", "Nintendo"); !ok {
+				error.ThrowError(w, "Неверный набор платформ", http.StatusBadRequest)
+				return
+			}
+		}
 
 		rating := queryParams.Get("rating")
 		if rating == "" {
 			rating = "0.0"
 		}
 		if ok := govalidator.IsFloat(rating); !ok {
-			http.Error(w, "Неверный формат рейтинга", http.StatusBadRequest)
+			error.ThrowError(w, "Неверный формат рейтинга", http.StatusBadRequest)
+			return
 		}
 
 		minPrice := queryParams.Get("minPrice")
 		if minPrice == "" {
 			minPrice = "0"
 		}
-		if ok := govalidator.IsFloat(rating); !ok {
-			http.Error(w, "Неверный формат цены", http.StatusBadRequest)
+		if ok := govalidator.IsFloat(minPrice); !ok {
+			error.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
+			return
 		}
 
 		maxPrice := queryParams.Get("maxPrice")
 		if maxPrice == "" {
 			maxPrice = "100"
 		}
-		if ok := govalidator.IsFloat(rating); !ok {
-			http.Error(w, "Неверный формат цены", http.StatusBadRequest)
+		if ok := govalidator.IsFloat(maxPrice); !ok {
+			error.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
+			return
 		}
 
 		var games []shared.Game
@@ -93,7 +111,7 @@ func main() {
 			FROM game 
 			WHERE price > $1 AND price < $2 AND rating >= $3 
 			  AND (title ILIKE '%' || $4 || '%' OR developer ILIKE '%' || $4 || '%' OR publisher ILIKE '%' || $4 || '%')
-		` //сделать ORDER BY тут а не далее
+		`
 
 		args = append(args, minPrice, maxPrice, rating, searchTerm)
 		query.WriteString(baseQuery)
@@ -112,10 +130,21 @@ func main() {
 			args = append(args, platforms)
 		}
 
+		switch sortType {
+		case "HIGH_PRICE":
+			query.WriteString(" ORDER BY price desc")
+		case "LOW_PRICE":
+			query.WriteString(" ORDER BY price asc")
+		case "OLDEST":
+			query.WriteString(" ORDER BY release_date asc")
+		default:
+			query.WriteString(" ORDER BY release_date desc")
+		}
+
 		rows, err := conn.Query(context.Background(), query.String(), args...)
 		if err != nil {
 			log.Printf("Ошибка запроса: %v", err)
-			http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
+			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -135,28 +164,17 @@ func main() {
 				&game.Genres,
 				&game.Platforms); err != nil {
 				log.Printf("Ошибка сканирования: %v", err)
-				http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
+				error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 				return
 			}
 			games = append(games, game)
-		}
-
-		switch sortType {
-		case "HIGH_PRICE":
-			sort.Sort(sort.Reverse(shared.SortByPrice(games)))
-		case "LOW_PRICE":
-			sort.Sort(shared.SortByPrice(games))
-		case "OLDEST":
-			sort.Sort(shared.SortByReleaseDate(games))
-		default:
-			sort.Sort(sort.Reverse(shared.SortByReleaseDate(games)))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		data, err := json.Marshal(games)
 		if err != nil {
 			log.Printf("Ошибка сериализации: %v", err)
-			http.Error(w, "Ошибка сервера", http.StatusInternalServerError)
+			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 
