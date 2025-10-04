@@ -16,9 +16,10 @@ import (
 	"github.com/asaskevich/govalidator"
 	"github.com/jackc/pgx/v5"
 	"github.com/joho/godotenv"
+	"github.com/rs/cors"
 )
 
-func getEnv() (string, string) {
+func getEnv() (string, string, string) {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Ошибка загрузки .env файла")
@@ -26,12 +27,13 @@ func getEnv() (string, string) {
 
 	dbURL := os.Getenv("DATABASE_URL")
 	port := os.Getenv("PORT")
+	clientUrl := os.Getenv("CLIENT_URL")
 
-	return dbURL, port
+	return dbURL, port, clientUrl
 }
 
 func main() {
-	dbURL, port := getEnv()
+	dbURL, port, clientUrl := getEnv()
 
 	// Подключение к БД
 	conn, err := pgx.Connect(context.Background(), dbURL)
@@ -41,6 +43,14 @@ func main() {
 	defer conn.Close(context.Background())
 
 	log.Println("Подключение к БД выполнено успешно")
+
+	// Настройка обслуживания статических файлов из папки "uploads"
+	http.Handle("/uploads/",
+		http.StripPrefix("/uploads/",
+			http.FileServer(http.Dir("uploads")),
+		),
+	)
+	log.Println("Статические файлы загружены")
 
 	http.HandleFunc("/games", func(w http.ResponseWriter, r *http.Request) {
 		queryParams, err := url.ParseQuery(r.URL.RawQuery)
@@ -80,7 +90,7 @@ func main() {
 			searchTerm = "%"
 		}
 
-		genres := shared.NormalizeSlice(strings.Split(queryParams.Get("genres"), ","))
+		genres := shared.NormalizeSlice(strings.Split(queryParams.Get("genres"), "|"))
 		for _, genre := range genres {
 			if ok := govalidator.IsIn(genre, "Action", "Shooter", "Horror", "RPG", "Adventure"); !ok {
 				error.ThrowError(w, "Неверный набор жанров", http.StatusBadRequest)
@@ -88,12 +98,10 @@ func main() {
 			}
 		}
 
-		platforms := shared.NormalizeSlice(strings.Split(queryParams.Get("platforms"), ","))
-		for _, platform := range platforms {
-			if ok := govalidator.IsIn(platform, "PC", "Xbox", "PlayStation", "Nintendo"); !ok {
-				error.ThrowError(w, "Неверный набор платформ", http.StatusBadRequest)
-				return
-			}
+		platform := queryParams.Get("platform")
+		if ok := govalidator.IsIn(platform, "PC", "Xbox", "PlayStation", "Nintendo", ""); !ok {
+			error.ThrowError(w, "Неверная платформа", http.StatusBadRequest)
+			return
 		}
 
 		rating := queryParams.Get("rating")
@@ -129,32 +137,44 @@ func main() {
 		}
 
 		var games []shared.Game
-		var query strings.Builder
 		var args []any
+
+		var query strings.Builder
+		var query2 strings.Builder
+		var whereQuery strings.Builder
 
 		baseQuery := `
 			SELECT id, title, image, price, rating, age_rating, release_date, developer, publisher, genres, platforms 
 			FROM game 
-			WHERE price > $1 AND price < $2 AND rating >= $3 
-			  AND (title ILIKE '%' || $4 || '%' OR developer ILIKE '%' || $4 || '%' OR publisher ILIKE '%' || $4 || '%')
 		`
 
+		countQuery := `
+			SELECT COUNT(*) AS filtered_count 
+			FROM game 
+		`
+
+		whereQuery.WriteString(`
+			WHERE price > $1 AND price < $2 AND rating >= $3 
+				AND (title ILIKE '%' || $4 || '%' OR developer ILIKE '%' || $4 || '%' OR publisher ILIKE '%' || $4 || '%')
+		`)
+
 		args = append(args, minPrice, maxPrice, rating, searchTerm)
+
 		query.WriteString(baseQuery)
+		query2.WriteString(countQuery)
+
+		if platform != "" {
+			str := " AND '" + platform + "' = ANY(platforms)"
+			whereQuery.WriteString(str)
+		}
 
 		if len(genres) > 0 {
-			query.WriteString(" AND genres @> $5")
+			whereQuery.WriteString(" AND genres @> $5")
 			args = append(args, genres)
 		}
 
-		if len(platforms) > 0 {
-			if len(genres) > 0 {
-				query.WriteString(" AND platforms @> $6")
-			} else {
-				query.WriteString(" AND platforms @> $5")
-			}
-			args = append(args, platforms)
-		}
+		query.WriteString(whereQuery.String())
+		query2.WriteString(whereQuery.String())
 
 		switch sortType {
 		case "HIGH_PRICE":
@@ -168,6 +188,8 @@ func main() {
 		}
 
 		query.WriteString(" LIMIT " + strconv.Itoa(perPage64) + " OFFSET " + strconv.Itoa((page64-1)*perPage64))
+
+		var response shared.GetGamesResponse
 
 		rows, err := conn.Query(context.Background(), query.String(), args...)
 		if err != nil {
@@ -198,20 +220,40 @@ func main() {
 			games = append(games, game)
 		}
 
+		counted, err := conn.Query(context.Background(), query2.String(), args...)
+		if err != nil {
+			log.Printf("Ошибка запроса подсчета: %v", err)
+			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		for counted.Next() {
+			if err := counted.Scan(&response.Length); err != nil {
+				log.Printf("Ошибка сканирования подсчета: %v", err)
+				error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+				return
+			}
+		}
+
 		var filteredGames []shared.Game
 
 		for _, game := range games {
 			if isAdultOnly != "true" {
 				filteredGames = append(filteredGames, game)
+				continue
 			}
 
 			if govalidator.IsIn(string(game.AgeRating), string(shared.M), string(shared.AO)) {
 				filteredGames = append(filteredGames, game)
+				continue
 			}
 		}
 
+		response.Games = filteredGames
+
 		w.Header().Set("Content-Type", "application/json")
-		data, err := json.Marshal(filteredGames)
+		data, err := json.Marshal(response)
 		if err != nil {
 			log.Printf("Ошибка сериализации: %v", err)
 			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
@@ -221,6 +263,17 @@ func main() {
 		w.Write(data)
 	})
 
+	// Настройка CORS
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{clientUrl}, // Разрешенные домены
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true, // Разрешить куки/авторизацию
+		MaxAge:           100,  // Кэширование preflight-запроса
+	})
+
 	log.Printf("Сервер запущен на http://localhost:%s", port)
-	http.ListenAndServe(":"+port, nil)
+
+	handler := c.Handler(http.DefaultServeMux)
+	http.ListenAndServe(":"+port, handler)
 }

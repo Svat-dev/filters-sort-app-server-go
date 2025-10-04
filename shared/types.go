@@ -21,6 +21,11 @@ type Game struct {
 	ReleaseDate time.Time `json:"release_date"`
 }
 
+type GetGamesResponse struct {
+	Games  []Game `json:"games"`
+	Length int    `json:"length"`
+}
+
 type APIError struct {
 	Message   string    `json:"message"`
 	Status    int       `json:"status"`
