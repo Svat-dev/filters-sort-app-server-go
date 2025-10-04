@@ -6,34 +6,22 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
+	"slices"
+
 	"strconv"
 	"strings"
 
-	"main/error"
+	"main/cerror"
 	"main/shared"
 
 	"github.com/asaskevich/govalidator"
 	"github.com/jackc/pgx/v5"
-	"github.com/joho/godotenv"
+
 	"github.com/rs/cors"
 )
 
-func getEnv() (string, string, string) {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Ошибка загрузки .env файла")
-	}
-
-	dbURL := os.Getenv("DATABASE_URL")
-	port := os.Getenv("PORT")
-	clientUrl := os.Getenv("CLIENT_URL")
-
-	return dbURL, port, clientUrl
-}
-
 func main() {
-	dbURL, port, clientUrl := getEnv()
+	dbURL, port, clientUrl := shared.GetEnv()
 
 	// Подключение к БД
 	conn, err := pgx.Connect(context.Background(), dbURL)
@@ -55,33 +43,35 @@ func main() {
 	http.HandleFunc("/games", func(w http.ResponseWriter, r *http.Request) {
 		queryParams, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			error.ThrowError(w, "Ошибка парсинга параметров", http.StatusBadRequest)
+			cerror.ThrowError(w, "Ошибка парсинга параметров", http.StatusBadRequest)
 			return
 		}
 
-		page := queryParams.Get("page")
-		if page == "" {
-			page = "1"
+		// Вспомогательная функция для получения и проверки числовых параметров
+		getIntParam := func(name string, defaultValue int) (int, error) {
+			val := queryParams.Get(name)
+			if val == "" {
+				return defaultValue, nil
+			}
+			return strconv.Atoi(val)
 		}
-		page64, err := strconv.Atoi(page)
-		if err != nil {
-			error.ThrowError(w, "Неправильный тип числа", http.StatusBadRequest)
+
+		page, err := getIntParam("page", 1)
+		if err != nil || page < 1 {
+			cerror.ThrowError(w, "Неверный номер страницы", http.StatusBadRequest)
 			return
 		}
 
-		perPage := queryParams.Get("perPage")
-		if perPage == "" {
-			perPage = "30"
-		}
-		perPage64, err := strconv.Atoi(perPage)
-		if err != nil {
-			error.ThrowError(w, "Неправильный тип числа", http.StatusBadRequest)
+		perPage, err := getIntParam("perPage", 30)
+		if err != nil || perPage < 1 || perPage > 100 {
+			cerror.ThrowError(w, "Неверное количество элементов на странице", http.StatusBadRequest)
 			return
 		}
 
 		sortType := queryParams.Get("sort")
-		if ok := govalidator.IsIn(sortType, "HIGH_PRICE", "LOW_PRICE", "OLDEST", "NEWEST", ""); !ok {
-			error.ThrowError(w, "Неверный тип сортировки", http.StatusBadRequest)
+		validSortTypes := []string{"HIGH_PRICE", "LOW_PRICE", "OLDEST", "NEWEST", ""}
+		if !slices.Contains(validSortTypes, sortType) {
+			cerror.ThrowError(w, "Неверный тип сортировки", http.StatusBadRequest)
 			return
 		}
 
@@ -91,16 +81,18 @@ func main() {
 		}
 
 		genres := shared.NormalizeSlice(strings.Split(queryParams.Get("genres"), "|"))
+		validGenres := []string{"Action", "Shooter", "Horror", "RPG", "Adventure", ""}
 		for _, genre := range genres {
-			if ok := govalidator.IsIn(genre, "Action", "Shooter", "Horror", "RPG", "Adventure"); !ok {
-				error.ThrowError(w, "Неверный набор жанров", http.StatusBadRequest)
+			if !slices.Contains(validGenres, genre) {
+				cerror.ThrowError(w, "Неверный набор жанров", http.StatusBadRequest)
 				return
 			}
 		}
 
 		platform := queryParams.Get("platform")
-		if ok := govalidator.IsIn(platform, "PC", "Xbox", "PlayStation", "Nintendo", ""); !ok {
-			error.ThrowError(w, "Неверная платформа", http.StatusBadRequest)
+		validPlatforms := []string{"PC", "Xbox", "PlayStation", "Nintendo", ""}
+		if !slices.Contains(validPlatforms, platform) && platform != "" {
+			cerror.ThrowError(w, "Неверная платформа", http.StatusBadRequest)
 			return
 		}
 
@@ -108,8 +100,8 @@ func main() {
 		if rating == "" {
 			rating = "0.0"
 		}
-		if ok := govalidator.IsFloat(rating); !ok {
-			error.ThrowError(w, "Неверный формат рейтинга", http.StatusBadRequest)
+		if !govalidator.IsFloat(rating) {
+			cerror.ThrowError(w, "Неверный формат рейтинга", http.StatusBadRequest)
 			return
 		}
 
@@ -117,8 +109,8 @@ func main() {
 		if minPrice == "" {
 			minPrice = "0"
 		}
-		if ok := govalidator.IsFloat(minPrice); !ok {
-			error.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
+		if !govalidator.IsFloat(minPrice) {
+			cerror.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
 			return
 		}
 
@@ -126,79 +118,71 @@ func main() {
 		if maxPrice == "" {
 			maxPrice = "100"
 		}
-		if ok := govalidator.IsFloat(maxPrice); !ok {
-			error.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
+		if !govalidator.IsFloat(maxPrice) {
+			cerror.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
 			return
 		}
 
 		isAdultOnly := queryParams.Get("isAdultOnly")
-		if ok := govalidator.IsIn(isAdultOnly, "true", "false", ""); !ok {
-			error.ThrowError(w, `Неверный тип "только для взрослых"`, http.StatusBadRequest)
+		if isAdultOnly != "" && isAdultOnly != "true" && isAdultOnly != "false" {
+			cerror.ThrowError(w, `Неверный тип "только для взрослых"`, http.StatusBadRequest)
+			return
 		}
 
 		var games []shared.Game
 		var args []any
 
 		var query strings.Builder
-		var query2 strings.Builder
-		var whereQuery strings.Builder
+		var countQuery strings.Builder
+
+		args = append(args, minPrice, maxPrice, rating, searchTerm)
+		whereQuery := shared.BuildFilterWhereClause(genres, platform, isAdultOnly, len(args))
+
+		if platform != "" {
+			args = append(args, platform)
+		}
+
+		if len(genres) > 0 {
+			args = append(args, genres)
+		}
 
 		baseQuery := `
 			SELECT id, title, image, price, rating, age_rating, release_date, developer, publisher, genres, platforms 
 			FROM game 
 		`
 
-		countQuery := `
+		countBaseQuery := `
 			SELECT COUNT(*) AS filtered_count 
 			FROM game 
 		`
 
-		whereQuery.WriteString(`
-			WHERE price > $1 AND price < $2 AND rating >= $3 
-				AND (title ILIKE '%' || $4 || '%' OR developer ILIKE '%' || $4 || '%' OR publisher ILIKE '%' || $4 || '%')
-		`)
-
-		args = append(args, minPrice, maxPrice, rating, searchTerm)
-
 		query.WriteString(baseQuery)
-		query2.WriteString(countQuery)
+		countQuery.WriteString(countBaseQuery)
 
-		if isAdultOnly == "true" {
-			whereQuery.WriteString(" AND age_rating IN ('AO', 'M')")
+		if whereQuery.String() != "" {
+			query.WriteString(whereQuery.String())
+			countQuery.WriteString(whereQuery.String())
 		}
-
-		if platform != "" {
-			str := " AND '" + platform + "' = ANY(platforms)"
-			whereQuery.WriteString(str)
-		}
-
-		if len(genres) > 0 {
-			whereQuery.WriteString(" AND genres @> $5")
-			args = append(args, genres)
-		}
-
-		query.WriteString(whereQuery.String())
-		query2.WriteString(whereQuery.String())
 
 		switch sortType {
 		case "HIGH_PRICE":
-			query.WriteString(" ORDER BY price desc")
+			query.WriteString(" ORDER BY price DESC")
 		case "LOW_PRICE":
-			query.WriteString(" ORDER BY price asc")
+			query.WriteString(" ORDER BY price ASC")
 		case "OLDEST":
-			query.WriteString(" ORDER BY release_date asc")
+			query.WriteString(" ORDER BY release_date ASC")
 		default:
-			query.WriteString(" ORDER BY release_date desc")
+			query.WriteString(" ORDER BY release_date DESC")
 		}
 
-		query.WriteString(" LIMIT " + strconv.Itoa(perPage64) + " OFFSET " + strconv.Itoa((page64-1)*perPage64))
+		query.WriteString(" LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2))
 
 		var response shared.GetGamesResponse
 
-		rows, err := conn.Query(context.Background(), query.String(), args...)
+		rows, err := conn.Query(context.Background(), query.String(), append(args, perPage, (page-1)*perPage)...)
 		if err != nil {
 			log.Printf("Ошибка запроса: %v", err)
-			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -218,16 +202,16 @@ func main() {
 				&game.Genres,
 				&game.Platforms); err != nil {
 				log.Printf("Ошибка сканирования: %v", err)
-				error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+				cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 				return
 			}
 			games = append(games, game)
 		}
 
-		counted, err := conn.Query(context.Background(), query2.String(), args...)
+		counted, err := conn.Query(context.Background(), countQuery.String(), args...)
 		if err != nil {
 			log.Printf("Ошибка запроса подсчета: %v", err)
-			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -235,7 +219,7 @@ func main() {
 		for counted.Next() {
 			if err := counted.Scan(&response.Length); err != nil {
 				log.Printf("Ошибка сканирования подсчета: %v", err)
-				error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+				cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 				return
 			}
 		}
@@ -246,7 +230,7 @@ func main() {
 		data, err := json.Marshal(response)
 		if err != nil {
 			log.Printf("Ошибка сериализации: %v", err)
-			error.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 
