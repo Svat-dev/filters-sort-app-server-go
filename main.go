@@ -33,12 +33,8 @@ func main() {
 	log.Println("Подключение к БД выполнено успешно")
 
 	// Настройка обслуживания статических файлов из папки "uploads"
-	http.Handle("/uploads/",
-		http.StripPrefix("/uploads/",
-			http.FileServer(http.Dir("uploads")),
-		),
-	)
-	log.Println("Статические файлы загружены")
+	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("uploads"))))
+	log.Println("Путь до статических файлов загружен")
 
 	http.HandleFunc("/games", func(w http.ResponseWriter, r *http.Request) {
 		queryParams, err := url.ParseQuery(r.URL.RawQuery)
@@ -214,7 +210,7 @@ func main() {
 			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
-		defer rows.Close()
+		defer counted.Close()
 
 		for counted.Next() {
 			if err := counted.Scan(&response.Length); err != nil {
@@ -224,7 +220,11 @@ func main() {
 			}
 		}
 
-		response.Games = games
+		if games == nil {
+			response.Games = []shared.Game{}
+		} else {
+			response.Games = games
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		data, err := json.Marshal(response)
