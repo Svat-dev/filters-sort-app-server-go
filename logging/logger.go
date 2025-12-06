@@ -1,4 +1,4 @@
-package cerror
+package logging
 
 import "log"
 

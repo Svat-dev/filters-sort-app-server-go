@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"main/cerror"
+	"main/logging"
 	"main/shared"
 
 	"github.com/asaskevich/govalidator"
@@ -39,7 +39,7 @@ func main() {
 	http.HandleFunc("/games", func(w http.ResponseWriter, r *http.Request) {
 		queryParams, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			cerror.ThrowError(w, "Ошибка парсинга параметров", http.StatusBadRequest)
+			logging.ThrowError(w, "Ошибка парсинга параметров", http.StatusBadRequest)
 			return
 		}
 
@@ -54,20 +54,20 @@ func main() {
 
 		page, err := getIntParam("page", 1)
 		if err != nil || page < 1 {
-			cerror.ThrowError(w, "Неверный номер страницы", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверный номер страницы", http.StatusBadRequest)
 			return
 		}
 
 		perPage, err := getIntParam("perPage", 30)
 		if err != nil || perPage < 1 || perPage > 100 {
-			cerror.ThrowError(w, "Неверное количество элементов на странице", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверное количество элементов на странице", http.StatusBadRequest)
 			return
 		}
 
 		sortType := queryParams.Get("sort")
 		validSortTypes := []string{"HIGH_PRICE", "LOW_PRICE", "OLDEST", "NEWEST", ""}
 		if !slices.Contains(validSortTypes, sortType) {
-			cerror.ThrowError(w, "Неверный тип сортировки", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверный тип сортировки", http.StatusBadRequest)
 			return
 		}
 
@@ -80,7 +80,7 @@ func main() {
 		validGenres := []string{"Action", "Shooter", "Horror", "RPG", "Adventure", ""}
 		for _, genre := range genres {
 			if !slices.Contains(validGenres, genre) {
-				cerror.ThrowError(w, "Неверный набор жанров", http.StatusBadRequest)
+				logging.ThrowError(w, "Неверный набор жанров", http.StatusBadRequest)
 				return
 			}
 		}
@@ -88,7 +88,7 @@ func main() {
 		platform := queryParams.Get("platform")
 		validPlatforms := []string{"PC", "Xbox", "PlayStation", "Nintendo", ""}
 		if !slices.Contains(validPlatforms, platform) && platform != "" {
-			cerror.ThrowError(w, "Неверная платформа", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверная платформа", http.StatusBadRequest)
 			return
 		}
 
@@ -97,7 +97,7 @@ func main() {
 			rating = "0.0"
 		}
 		if !govalidator.IsFloat(rating) {
-			cerror.ThrowError(w, "Неверный формат рейтинга", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверный формат рейтинга", http.StatusBadRequest)
 			return
 		}
 
@@ -106,7 +106,7 @@ func main() {
 			minPrice = "0"
 		}
 		if !govalidator.IsFloat(minPrice) {
-			cerror.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
 			return
 		}
 
@@ -115,13 +115,13 @@ func main() {
 			maxPrice = "100"
 		}
 		if !govalidator.IsFloat(maxPrice) {
-			cerror.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
+			logging.ThrowError(w, "Неверный формат цены", http.StatusBadRequest)
 			return
 		}
 
 		isAdultOnly := queryParams.Get("isAdultOnly")
 		if isAdultOnly != "" && isAdultOnly != "true" && isAdultOnly != "false" {
-			cerror.ThrowError(w, `Неверный тип "только для взрослых"`, http.StatusBadRequest)
+			logging.ThrowError(w, `Неверный тип "только для взрослых"`, http.StatusBadRequest)
 			return
 		}
 
@@ -178,7 +178,7 @@ func main() {
 		rows, err := conn.Query(context.Background(), query.String(), append(args, perPage, (page-1)*perPage)...)
 		if err != nil {
 			log.Printf("Ошибка запроса: %v", err)
-			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			logging.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
@@ -198,7 +198,7 @@ func main() {
 				&game.Genres,
 				&game.Platforms); err != nil {
 				log.Printf("Ошибка сканирования: %v", err)
-				cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+				logging.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 				return
 			}
 			games = append(games, game)
@@ -207,7 +207,7 @@ func main() {
 		counted, err := conn.Query(context.Background(), countQuery.String(), args...)
 		if err != nil {
 			log.Printf("Ошибка запроса подсчета: %v", err)
-			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			logging.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 		defer counted.Close()
@@ -215,7 +215,7 @@ func main() {
 		for counted.Next() {
 			if err := counted.Scan(&response.Length); err != nil {
 				log.Printf("Ошибка сканирования подсчета: %v", err)
-				cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+				logging.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 				return
 			}
 		}
@@ -230,7 +230,7 @@ func main() {
 		data, err := json.Marshal(response)
 		if err != nil {
 			log.Printf("Ошибка сериализации: %v", err)
-			cerror.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
+			logging.ThrowError(w, "Ошибка сервера", http.StatusInternalServerError)
 			return
 		}
 
